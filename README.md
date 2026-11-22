@@ -1,5 +1,8 @@
 # T95 (Allwinner H616) → mainline Debian server
 
+<img width="1024" height="576" alt="image" src="https://github.com/user-attachments/assets/acbdd942-37fb-49af-9c3f-e0d1d5bdaae4" />
+
+
 This turns the **T95 H616 Android TV box** (the one that shipped with the
 "Corejava" firmware malware) into a headless **Debian 13 arm64 server**. It runs
 **mainline U-Boot, TF-A and the stock Debian kernel**, with a device tree
