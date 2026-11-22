@@ -46,7 +46,7 @@ Android over adb:
 | Part | Value |
 |---|---|
 | Android | Settings → About: model `MBOX`, build `10.1.A29-0407` |
-| PCB marking | most likely `H616-T95MAX-AXP313A-v3.0` (not yet checked on the board itself) |
+| PCB marking | most likely `H616-T95MAX-AXP313A-v3.0` |
 | SoC | H616 (`sun50iw9`), secure boot **on**, `sunxi_rotpk: 0` |
 | RAM | 4 GB DDR3 @ 600 MHz |
 | PMIC | **AXP1530** at r_i2c 0x36 (chip id reg 0x03 = 0x4b) |
