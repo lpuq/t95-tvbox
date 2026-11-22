@@ -312,6 +312,8 @@ builds reproducible.
 * [linux-sunxi.org](https://linux-sunxi.org): H616 and T95 documentation.
 * U-Boot, Trusted Firmware-A, Linux and Debian maintainers. The board DTS is
   derived from `sun50i-h618-transpeed-8k618-t.dts`.
+* Claude for doing pretty much all of the work to get an image running.
+* NickAlilovic for helping me set up Armbian on this board many months ago.
 
 ## License
 
