@@ -1,0 +1,10 @@
+#!/bin/sh
+# First boot: grow the root partition + filesystem to fill the card/eMMC.
+set -e
+src=$(findmnt -no SOURCE /)
+disk=/dev/$(lsblk -no PKNAME "$src")
+part=$(cat /sys/class/block/$(basename "$src")/partition)
+growpart "$disk" "$part" || true   # exit 1 = already max size
+resize2fs "$src"
+[ -e /etc/resolv.conf ] || ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+touch /var/lib/t95-growroot.done

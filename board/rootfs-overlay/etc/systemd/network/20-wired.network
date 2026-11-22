@@ -1,0 +1,13 @@
+# Any wired NIC (USB Ethernet adapters show up as enx<mac> / eth*)
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+# identify by MAC, not by a machine-id-derived DUID: every install on this box
+# (eMMC, recovery SD, reinstalls) then gets the same lease / router reservation
+ClientIdentifier=mac
+# the hostname is ours (t95); don't let the router rename the box
+UseHostname=no

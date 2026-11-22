@@ -1,0 +1,180 @@
+diff --git a/leds-fd6551.c b/leds-fd6551.c
+index c6e1e21..9a418d2 100644
+--- a/leds-fd6551.c
++++ b/leds-fd6551.c
+@@ -22,7 +22,7 @@
+ #define FD6551_DIGITS_ADDR_BASE 0x34
+ 
+ #define ASCII_TABLE_OFFSET 		0x20
+-#define ASCII_MAX_CHAR_CODE (ARRAY_SIZE(ascii_to_seven) + ASCII_TABLE_OFFSET)
++#define ASCII_MAX_CHAR_CODE (ARRAY_SIZE(ascii_to_seven) + ASCII_TABLE_OFFSET - 1)
+ 
+ #define ldev_to_led(c)		container_of(c, struct fd6551_led, ldev)
+ 
+@@ -153,6 +153,9 @@ struct fd6551_priv {
+ 	unsigned int brightness;
+ 	unsigned icon_set_bitmask;
+ 	char text[FD6551_MAX_DIGITS];
++
++	/* segment_map[n]: physical bit driving logical segment n (a..g, dp) */
++	u8 segment_map[8];
+ };
+ 
+ struct fd6551_chip {
+@@ -210,6 +213,23 @@ fd6551_set_status(struct fd6551_priv *priv)
+ 
+ }
+ 
++/*
++ * Translate a logical segment pattern (bit 0 = a ... bit 6 = g, bit 7 = dp)
++ * into the bits the panel is actually wired to (DT "segment-map").
++ */
++static unsigned char
++fd6551_map_segments(struct fd6551_priv *priv, unsigned char logical)
++{
++	unsigned char physical = 0;
++	int seg;
++
++	for (seg = 0; seg < 8; seg++)
++		if (logical & BIT(seg))
++			physical |= BIT(priv->segment_map[seg]);
++
++	return physical;
++}
++
+ /*
+  * Sysfs interface for reading and writing text on the display
+  */
+@@ -217,9 +237,8 @@ static ssize_t
+ chars_show(struct device *dev, struct device_attribute *attr, char *buf)
+ {
+ 	struct fd6551_priv *priv = dev_get_drvdata(dev);
+-	strncpy(buf, (const char *)priv->text, FD6551_MAX_DIGITS);
+ 
+-	return strlen(priv->text);
++	return sysfs_emit(buf, "%.*s\n", (int)priv->chip_data->digits, priv->text);
+ }
+ 
+ static ssize_t
+@@ -242,7 +261,7 @@ chars_store(struct device *dev, struct device_attribute *attr, const char *buf,
+ 
+ 		ch = max(min(ch, ASCII_MAX_CHAR_CODE), ASCII_TABLE_OFFSET) - ASCII_TABLE_OFFSET;
+ 
+-		ch_bits = ascii_to_seven[(unsigned int)ch];
++		ch_bits = fd6551_map_segments(priv, ascii_to_seven[(unsigned int)ch]);
+ 
+ 		i2c_client = priv->i2c_client_digits[idx];
+ 
+@@ -339,6 +358,12 @@ fd6551_led_brightness_set(struct led_classdev *led_cdev,
+ 	return fd6551_write(led->i2c_client, value);
+ }
+ 
++static void
++fd6551_unregister_client(void *data)
++{
++	i2c_unregister_device(data);
++}
++
+ static int
+ fd6551_init_leds(struct fd6551_priv *priv, struct device_node *np, const struct fd6551_chip *chip_data)
+ {
+@@ -374,6 +399,10 @@ fd6551_init_leds(struct fd6551_priv *priv, struct device_node *np, const struct
+ 		return err;
+ 	}
+ 
++	err = devm_add_action_or_reset(dev, fd6551_unregister_client, i2c_client_icon_set);
++	if (err)
++		return err;
++
+ 	priv->i2c_client_icon_set = i2c_client_icon_set;
+ 
+ 	fd6551_reset_leds(i2c_client_icon_set);
+@@ -388,7 +417,7 @@ fd6551_init_leds(struct fd6551_priv *priv, struct device_node *np, const struct
+ 
+ 		err = of_property_read_u32(child, "bit", &bit);
+ 		if (err) {
+-			dev_err(dev, "missing bit property for led %s\n", led->ldev.name);
++			dev_err(dev, "missing bit property for led %pOFn\n", child);
+ 			of_node_put(child);
+ 			return err;
+ 		}
+@@ -430,6 +459,31 @@ fd6551_init_digits(struct fd6551_priv *priv, struct device_node *np, const struc
+ 
+ 	reversed = of_property_read_bool(np, "digits-reversed");
+ 
++	/*
++	 * Optional "segment-map" (8 x u8): physical bit for each logical
++	 * segment a, b, c, d, e, f, g, dp. Default is the identity; a panel
++	 * mounted upside down needs /bits/ 8 <3 4 5 0 1 2 6 7> together with
++	 * digits-reversed.
++	 */
++	for (idx = 0; idx < 8; idx++)
++		priv->segment_map[idx] = idx;
++	if (of_property_present(np, "segment-map")) {
++		u8 map[8];
++
++		err = of_property_read_u8_array(np, "segment-map", map, 8);
++		if (err) {
++			dev_err(dev, "segment-map must be 8 bytes, err: %d\n", err);
++			return err;
++		}
++		for (idx = 0; idx < 8; idx++) {
++			if (map[idx] > 7) {
++				dev_err(dev, "segment-map entry %d out of range\n", idx);
++				return -EINVAL;
++			}
++			priv->segment_map[idx] = map[idx];
++		}
++	}
++
+ 	for (idx = 1; idx <= priv->chip_data->digits; idx++) {
+ 
+ 		snprintf(dig_name, sizeof(dig_name), "dig%d", idx);
+@@ -441,6 +495,10 @@ fd6551_init_digits(struct fd6551_priv *priv, struct device_node *np, const struc
+ 			return err;
+ 		}
+ 
++		err = devm_add_action_or_reset(dev, fd6551_unregister_client, i2c_client_digit);
++		if (err)
++			return err;
++
+ 		if (reversed)
+ 			addr = priv->chip_data->digits - idx;
+ 		else
+@@ -475,19 +533,15 @@ fd6551_remove(struct i2c_client *i2c_client)
+ 
+ 	device_remove_file(priv->dev, &dev_attr_SYSFS_CHARS);
+ 
+-	if (priv->i2c_client_icon_set) {
++	/* blank everything; the ancillary clients are unregistered by devres */
++	if (priv->i2c_client_icon_set)
+ 		fd6551_reset_leds(priv->i2c_client_icon_set);
+-		i2c_unregister_device(priv->i2c_client_icon_set);
+-	}
+ 
+ 	for (int idx = 0; idx < FD6551_MAX_DIGITS; idx++) {
+ 		i2c_client_digit = priv->i2c_client_digits[idx];
+ 
+-		if (!i2c_client_digit)
+-			continue;
+-
+-		fd6551_reset_leds(i2c_client_digit);
+-		i2c_unregister_device(i2c_client_digit);
++		if (i2c_client_digit)
++			fd6551_reset_leds(i2c_client_digit);
+ 	}
+ 
+ }
+@@ -495,9 +549,10 @@ fd6551_remove(struct i2c_client *i2c_client)
+ static void
+ fd6551_shutdown(struct i2c_client *i2c_client)
+ {
++	struct fd6551_priv *priv = i2c_get_clientdata(i2c_client);
+ 
+-	fd6551_remove(i2c_client);
+-
++	if (priv && priv->i2c_client_status)
++		fd6551_set_off(priv);
+ }
+ 
+ static int

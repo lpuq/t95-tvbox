@@ -1,0 +1,63 @@
+#!/bin/sh
+# Install the running system (booted from an SD card) onto the eMMC, the way an
+# installer would: partition, copy, make it bootable. Your accounts, passwords,
+# SSH keys and settings come along; the eMMC copy gets its own root label
+# (t95-emmc), machine-id and SSH host keys. EVERYTHING on the eMMC is erased.
+# Usage: sudo t95-install-emmc [--yes]
+set -eu
+UBOOT=/usr/lib/t95/u-boot-sunxi-with-spl.bin
+LABEL=t95-emmc
+die() { echo "t95-install-emmc: $*" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "run as root (sudo t95-install-emmc)"
+SRC=$(findmnt -no SOURCE /)
+SRCDISK=/dev/$(lsblk -no PKNAME "$SRC")
+[ "$(cat /sys/block/${SRCDISK#/dev/}/device/type 2>/dev/null)" = SD ] ||
+	die "the running system is not on an SD card ($SRC) - boot from SD first"
+EMMC=
+for d in /sys/block/mmcblk[0-9]; do
+	[ "$(cat $d/device/type 2>/dev/null)" = MMC ] && EMMC=/dev/${d##*/}
+done
+[ -n "$EMMC" ] || die "no eMMC found"
+! grep -q "^$EMMC" /proc/mounts || die "$EMMC is mounted - unmount it first"
+[ "$(head -c 8 "$UBOOT" 2>/dev/null)" = TOC0.GLH ] || die "missing or bad $UBOOT"
+SRCLABEL=$(blkid -s LABEL -o value "$SRC")
+
+echo "Source: $SRC (label $SRCLABEL), $(df -h --output=used / | tail -1 | tr -d ' ') used"
+echo "Target: $EMMC, $(lsblk -dno SIZE "$EMMC") - current contents:"
+lsblk -o NAME,SIZE,FSTYPE,LABEL "$EMMC" | sed 's/^/   /'
+if [ "${1:-}" != --yes ]; then
+	printf "ALL DATA ON %s WILL BE ERASED. Type 'yes' to continue: " "$EMMC"
+	read -r ans; [ "$ans" = yes ] || die "aborted"
+fi
+
+echo "== partitioning"
+wipefs -a -q "$EMMC"
+echo 'start=32768, type=83, bootable' | sfdisk -q --label dos "$EMMC"
+partx -u "$EMMC" 2>/dev/null || blockdev --rereadpt "$EMMC"
+udevadm settle
+P=${EMMC}p1; [ -b "$P" ] || die "$P did not appear"
+
+echo "== creating ext4 ($LABEL)"
+mkfs.ext4 -q -F -L "$LABEL" -O ^metadata_csum_seed "$P"
+
+M=$(mktemp -d); trap 'umount "$M" 2>/dev/null; rmdir "$M"' EXIT
+mount "$P" "$M"
+echo "== copying the system"
+rsync -aHAXx --numeric-ids --info=progress2 \
+	--exclude=/var/log/journal/* --exclude=/var/tmp/* --exclude=/lost+found / "$M/"
+
+echo "== making it this install's own"
+: > "$M/etc/machine-id"
+rm -f "$M"/etc/ssh/ssh_host_* "$M/var/lib/systemd/random-seed" "$M/var/lib/systemd/credential.secret"
+touch "$M/var/lib/t95-growroot.done"     # the partition already fills the eMMC
+sed -i "s/LABEL=$SRCLABEL/LABEL=$LABEL/" "$M/etc/fstab" \
+	"$M/etc/u-boot-menu/conf.d/t95.conf" "$M/boot/extlinux/extlinux.conf"
+grep -q "root=LABEL=$LABEL" "$M/boot/extlinux/extlinux.conf" || die "extlinux.conf not updated"
+
+echo "== writing the bootloader"
+dd if="$UBOOT" of="$EMMC" bs=1K seek=8 conv=notrunc,fsync status=none
+sync
+echo
+echo "Done. Power off (sudo poweroff), remove the SD card, and power on:"
+echo "the box now boots from the eMMC. Keep the SD card as a recovery disk."

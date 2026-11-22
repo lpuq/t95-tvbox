@@ -1,0 +1,55 @@
+#!/bin/sh
+# T95 front panel (FD6551, leds-fd6551 driver):
+#   digits  HH:MM in the system timezone ("----" until NTP has synced)
+#   colon   blinks at 1 Hz (kernel timer trigger)
+#   clock   icon on
+#   net     wired link + traffic (kernel netdev trigger on the first wired NIC)
+P=/sys/bus/i2c/devices/0-0024
+L=/sys/class/leds/fd6551
+
+# the driver is a DKMS module loaded by udev; wait for it
+for i in $(seq 1 60); do [ -w "$P/chars" ] && break; sleep 1; done
+[ -w "$P/chars" ] || { echo "front panel driver not loaded, nothing to do"; exit 0; }
+
+modprobe -q ledtrig-timer
+modprobe -q ledtrig-netdev
+
+# printf, not echo: netdev's device_name counts a trailing newline, and a
+# 15-character enx<mac> name plus newline is rejected as too long (EINVAL)
+set_led() { [ -e "$L::$1/$2" ] && printf '%s' "$3" > "$L::$1/$2"; }
+set_led clock brightness 1
+set_led colon trigger timer
+
+net_follow() {
+	nic=$(ls /sys/class/net | grep -E '^(enx|eth|end)' | head -n1)
+	[ -n "$nic" ] || return 0
+	[ "$(cat "$L::net/device_name" 2>/dev/null)" = "$nic" ] && return 0
+	set_led net trigger netdev
+	set_led net device_name "$nic"
+	set_led net link 1
+	set_led net rx 1
+	set_led net tx 1
+}
+
+blank() {
+	echo "    " > "$P/chars"
+	for l in clock colon net; do set_led $l trigger none; set_led $l brightness 0; done
+	exit 0
+}
+trap blank TERM INT
+
+while :; do
+	net_follow   # the USB adapter can come and go
+	if [ -e /run/systemd/timesync/synchronized ]; then
+		date +%H%M > "$P/chars"
+	else
+		echo "----" > "$P/chars"
+	fi
+	# wake at the next full minute (or in 5 s while waiting for NTP)
+	if [ -e /run/systemd/timesync/synchronized ]; then
+		s=$(date +%S); sleep $((60 - ${s#0})) &
+	else
+		sleep 5 &
+	fi
+	wait $!
+done

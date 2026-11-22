@@ -1,0 +1,9 @@
+#!/bin/sh
+# Called before sshd starts. The image ships without SSH host keys: on the first
+# start, create this install's own keys and print their fingerprints on the
+# serial console, so the first SSH connection can be checked against them.
+ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1 && exit 0
+ssh-keygen -A
+for k in /etc/ssh/ssh_host_*_key.pub; do
+	ssh-keygen -lf "$k"
+done | sed 's/^/t95: new SSH host key /' > /dev/console 2>/dev/null || true

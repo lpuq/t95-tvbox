@@ -1,0 +1,7 @@
+// Daily package lists + unattended-upgrades (origins: Debian's default
+// 50unattended-upgrades, i.e. trixie + trixie-security). Safe here because
+// apt can never write the bootloader (see preferences.d/no-bootloader-packages).
+// No automatic reboot: new kernels take effect at the next manual reboot.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";

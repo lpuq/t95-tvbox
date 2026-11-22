@@ -1,0 +1,9 @@
+[Unit]
+Description=T95 stability-test heartbeat (serial + journal)
+
+[Service]
+ExecStart=/usr/local/sbin/t95-heartbeat
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

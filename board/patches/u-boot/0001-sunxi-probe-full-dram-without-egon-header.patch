@@ -1,0 +1,19 @@
+diff --git a/board/sunxi/board.c b/board/sunxi/board.c
+index 3d1afec7..56f3289e 100644
+--- a/board/sunxi/board.c
++++ b/board/sunxi/board.c
+@@ -274,7 +274,14 @@ int dram_init(void)
+ 	struct boot_file_head *spl = get_spl_header(SPL_DRAM_HEADER_VERSION);
+ 
+ 	if (spl == INVALID_SPL_HEADER)
++		/*
++		 * No eGON header (e.g. a TOC0 image on secure-boot SoCs), so the
++		 * SPL-measured size is unavailable: probe up to the SoC maximum
++		 * instead of the 2 GiB PHYS_SDRAM_0_SIZE, or 4 GiB boards get 2 GiB.
++		 */
+ 		gd->ram_size = get_ram_size((long *)PHYS_SDRAM_0,
++					    IS_ENABLED(CONFIG_ARM64) ?
++					    CONFIG_SUNXI_DRAM_MAX_SIZE :
+ 					    PHYS_SDRAM_0_SIZE);
+ 	else
+ 		gd->ram_size = (phys_addr_t)spl->dram_size << 20;

@@ -1,0 +1,11 @@
+[Unit]
+Description=Grow root filesystem to fill the boot device (first boot)
+ConditionPathExists=!/var/lib/t95-growroot.done
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/t95-growroot
+
+[Install]
+WantedBy=multi-user.target

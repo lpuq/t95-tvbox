@@ -1,0 +1,9 @@
+
+ T95 (Allwinner H616) - Debian GNU/Linux 13, mainline U-Boot/TF-A
+ ----------------------------------------------------------------
+  set the timezone   sudo timedatectl set-timezone Region/City
+  add an SSH key     ssh-copy-id <user>@<this box>   (from your PC)
+  install to eMMC    sudo t95-install-emmc           (when booted from SD)
+  front panel        /sys/bus/i2c/devices/0-0024/chars, /sys/class/leds/fd6551::*
+  crash reports      /var/lib/systemd/pstore/
+

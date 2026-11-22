@@ -1,0 +1,282 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * T95 (Allwinner H616, AXP1530/AXP313A, 4 GiB DDR3, 32 GB eMMC) TV box.
+ *
+ * Derived from sun50i-h618-transpeed-8k618-t.dts; board facts taken from
+ * the vendor Android 10 device tree (backup/android/android.dts):
+ *   - AXP1530 @ r_i2c 0x36: dcdc1 vdd-gpu-sys 0.96V, dcdc2 vdd-cpu,
+ *     dcdc3 vdd-dram 1.5V (DDR3), aldo1 1.8V, dldo1 3.3V
+ *   - microSD card-detect PI16, eMMC 8-bit on mmc2
+ *   - USB1 VBUS enable on PH8, all four EHCI/OHCI pairs in use
+ *   - Wi-Fi BCM43342 on mmc1 (PG18 reg-on) - unsupported by brcmfmac, left off
+ *   - EMAC1 + internal AC300 EPHY - needs Linux >= 7.4, not described yet
+ *   - FD655/FD6551 front-panel display on PI11 (clk) / PI12 (dat): bit-banged
+ *     I2C, out-of-tree leds-fd6551 driver (board/drivers, DKMS)
+ */
+
+/dts-v1/;
+
+#include "sun50i-h616.dtsi"
+#include "sun50i-h616-cpu-opp.dtsi"
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/thermal/thermal.h>
+
+/ {
+	model = "T95 H616 TV box";
+	compatible = "t95,h616-tvbox", "allwinner,sun50i-h616";
+
+	aliases {
+		mmc0 = &mmc0;
+		mmc1 = &mmc2;
+		serial0 = &uart0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	/*
+	 * ramoops: the kernel's last messages (panic, oops, console) are kept in
+	 * this RAM and survive a watchdog or panic reset; systemd-pstore saves
+	 * them to /var/lib/systemd/pstore on the next boot. Placed clear of
+	 * U-Boot's load addresses (kernel/initrd/fdt below 0x53000000), the
+	 * PREBOOT RAM test (0x50000000, 0xd0000000) and U-Boot's relocation
+	 * near the top of RAM.
+	 */
+	reserved-memory {
+		ramoops@7f800000 {
+			compatible = "ramoops";
+			reg = <0x0 0x7f800000 0x0 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+			ecc-size = <16>;
+		};
+	};
+
+	/*
+	 * Front-panel display: FD6551 (FD650 family) on two GPIOs, I2C-like
+	 * protocol where each 7-bit "address" is a register (0x24 control,
+	 * 0x33 icons, 0x34..0x37 digits). Tested: clock is PI11, data PI12,
+	 * and this chip never ACKs (bit-banged by hand, every segment lit with
+	 * no ACK in either pin order), so both lines are output-only, which
+	 * makes i2c-algo-bit skip the ACK check. Open-drain + internal pull-ups.
+	 */
+	i2c-front-panel {
+		compatible = "i2c-gpio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		sda-gpios = <&pio 8 12 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN | GPIO_PULL_UP)>; /* PI12 */
+		scl-gpios = <&pio 8 11 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN | GPIO_PULL_UP)>; /* PI11 */
+		i2c-gpio,sda-output-only;
+		i2c-gpio,scl-output-only;
+		i2c-gpio,delay-us = <5>;	/* ~100 kHz */
+
+		front_panel: led-controller@24 {
+			compatible = "fdhisi,fd6551";
+			reg = <0x24>;
+			/*
+			 * Each digit is wired upside down (a<->d, b<->e, c<->f); the
+			 * digit order itself is normal. Tested on the panel.
+			 */
+			segment-map = /bits/ 8 <3 4 5 0 1 2 6 7>;
+
+			/* icon bits, mapped on the real panel; bit 7 drives nothing */
+			led-0 { label = "fd6551::clock"; bit = <0>; };
+			led-1 { label = "fd6551::usb"; bit = <1>; };
+			led-2 { label = "fd6551::play"; bit = <2>; };
+			led-3 { label = "fd6551::pause"; bit = <3>; };
+			led-4 { label = "fd6551::colon"; bit = <4>; };
+			led-5 { label = "fd6551::net"; bit = <5>; };
+			led-6 { label = "fd6551::wifi"; bit = <6>; };
+		};
+	};
+
+	reg_vcc5v: vcc5v {
+		/* board wide 5V supply directly from the DC input */
+		compatible = "regulator-fixed";
+		regulator-name = "vcc-5v";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+	};
+
+	reg_usb1_vbus: usb1-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "usb1-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&reg_vcc5v>;
+		enable-active-high;
+		gpio = <&pio 7 8 GPIO_ACTIVE_HIGH>;	/* PH8 */
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&reg_dcdc2>;
+};
+
+/*
+ * sun50i-h616.dtsi defines the cpu-thermal trips but no cooling map, so
+ * nothing ever throttles before the 110 C critical shutdown. Throttle the
+ * CPU cluster (one cpufreq policy) from the 70 C passive trip, like H6.
+ */
+&{/thermal-zones/cpu-thermal} {
+	cooling-maps {
+		map0 {
+			trip = <&cpu_target>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+&ehci0 {
+	status = "okay";
+};
+
+&ehci1 {
+	status = "okay";
+};
+
+&ehci2 {
+	status = "okay";
+};
+
+&ehci3 {
+	status = "okay";
+};
+
+&ir {
+	status = "okay";
+};
+
+&mmc0 {
+	/* microSD */
+	vmmc-supply = <&reg_dldo1>;
+	cd-gpios = <&pio 8 16 GPIO_ACTIVE_LOW>;	/* PI16 */
+	disable-wp;
+	bus-width = <4>;
+	status = "okay";
+};
+
+&mmc2 {
+	/*
+	 * eMMC. Vendor kernel: cap-mmc-highspeed only, 50 MHz. DDR52 gave
+	 * "data error ... send stop command failed" and stalled udev, so run
+	 * plain SDR high-speed like Android does.
+	 *
+	 * sunxi-mmc forces MMC_CAP_1_8V_DDR on every "new timings" controller
+	 * and only exempts nodes compatible with sun50i-h5-emmc (boards whose
+	 * traces can't do DDR). Appending that string keeps the a100-emmc
+	 * driver config (best match) but turns DDR off.
+	 */
+	compatible = "allwinner,sun50i-h616-emmc",
+		     "allwinner,sun50i-a100-emmc",
+		     "allwinner,sun50i-h5-emmc";
+	/* inherited from sun50i-h616.dtsi; I/O here is 1.8 V, and DDR fails */
+	/delete-property/ mmc-ddr-3_3v;
+	vmmc-supply = <&reg_dldo1>;
+	vqmmc-supply = <&reg_aldo1>;
+	bus-width = <8>;
+	non-removable;
+	cap-mmc-hw-reset;
+	max-frequency = <52000000>;
+	status = "okay";
+};
+
+&ohci0 {
+	status = "okay";
+};
+
+&ohci1 {
+	status = "okay";
+};
+
+&ohci2 {
+	status = "okay";
+};
+
+&ohci3 {
+	status = "okay";
+};
+
+&r_i2c {
+	status = "okay";
+
+	axp313: pmic@36 {
+		/* AXP1530: reg 0x03 = 0x4b, register compatible with AXP313A */
+		compatible = "x-powers,axp313a";
+		reg = <0x36>;
+		#interrupt-cells = <1>;
+		interrupt-controller;
+
+		vin1-supply = <&reg_vcc5v>;
+		vin2-supply = <&reg_vcc5v>;
+		vin3-supply = <&reg_vcc5v>;
+
+		regulators {
+			reg_aldo1: aldo1 {
+				regulator-always-on;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-name = "vcc-1v8";
+			};
+
+			reg_dldo1: dldo1 {
+				regulator-always-on;
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-name = "vcc-3v3-io-mmc";
+			};
+
+			reg_dcdc1: dcdc1 {
+				regulator-always-on;
+				regulator-min-microvolt = <810000>;
+				regulator-max-microvolt = <990000>;
+				regulator-name = "vdd-gpu-sys";
+			};
+
+			reg_dcdc2: dcdc2 {
+				regulator-always-on;
+				regulator-min-microvolt = <810000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-name = "vdd-cpu";
+			};
+
+			reg_dcdc3: dcdc3 {
+				regulator-always-on;
+				regulator-min-microvolt = <1500000>;
+				regulator-max-microvolt = <1500000>;
+				regulator-name = "vdd-dram";
+			};
+		};
+	};
+};
+
+/*
+ * No vcc-p*-supply on &pio: the rails are always-on, and with Debian's
+ * modular kernel (axp20x + i2c-mv64xxx are =m) those supplies make the
+ * built-in pinctrl - and with it uart0 - wait for the PMIC module, so
+ * clk_disable_unused gates the UART clock and the console goes silent.
+ */
+
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_ph_pins>;
+	status = "okay";
+};
+
+&usbotg {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&usbphy {
+	usb1_vbus-supply = <&reg_usb1_vbus>;
+	status = "okay";
+};

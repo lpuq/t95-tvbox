@@ -1,0 +1,19 @@
+diff --git a/plat/allwinner/common/sunxi_native_pm.c b/plat/allwinner/common/sunxi_native_pm.c
+index 28abd3c..5dd20e6 100644
+--- a/plat/allwinner/common/sunxi_native_pm.c
++++ b/plat/allwinner/common/sunxi_native_pm.c
+@@ -58,6 +58,14 @@ static void __dead2 sunxi_system_reset(void)
+ 	mmio_write_32(SUNXI_WDOG0_CFG_REG, 1);
+ 	/* Enable the watchdog with the shortest timeout (0.5 seconds) */
+ 	mmio_write_32(SUNXI_WDOG0_MODE_REG, (0 << 4) | 1);
++	/*
++	 * (Re)start the counter. If the OS left the watchdog running (e.g.
++	 * systemd's hardware watchdog during a kernel panic), rewriting MODE
++	 * does not restart it, and on H616 the reset never fires: the box
++	 * hangs in "PSCI: System reset failed" with the watchdog disarmed.
++	 * Linux's sunxi_wdt restart handler does the same reload (key 0xa57).
++	 */
++	mmio_write_32(SUNXI_WDOG0_CTRL_REG, (0xa57 << 1) | 1);
+ 	/* Wait for twice the watchdog timeout before panicking */
+ 	mdelay(1000);
+ 

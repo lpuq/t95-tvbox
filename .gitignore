@@ -1,0 +1,12 @@
+# NEVER publish: signing key, eMMC dumps (contain the vendor firmware and your
+# device's identifiers), vendor blobs, logs (contain LAN addresses), local notes
+keys/
+backup/
+logs/
+*.log
+*.html
+
+# fetched sources and build output
+src/
+build/
+out/

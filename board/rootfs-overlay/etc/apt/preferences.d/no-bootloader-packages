@@ -1,0 +1,5 @@
+# The boot ROM only accepts our TOC0-signed U-Boot. Never let apt install a
+# package that could write a bootloader to the SD card / eMMC.
+Package: u-boot-sunxi flash-kernel
+Pin: release *
+Pin-Priority: -1
